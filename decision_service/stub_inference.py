@@ -50,26 +50,27 @@ app = FastAPI(title="Stub Inference Server", lifespan=lifespan)
 # Request schemas
 # ---------------------------------------------------------------------------
 class GenerateReq(BaseModel):
-    request_id: str
+    ID: str | int | None = None
     prompt: str
-    max_tokens: int = 256
+    max_tokens: int = Field(default=256)
     temperature: float = 0.0
     top_p: float = 1.0
     stop: list[str] = Field(default_factory=list)
-    # accept & ignore extra fields from decision service
     model_config = {"extra": "allow"}
 
 
 class LoglikelihoodReq(BaseModel):
-    request_id: str
+    ID: str | int | None = None
     prompt: str
-    continuation: str
+    eval_continuation: str = ""
+    eval_request_type: str = "loglikelihood"
     model_config = {"extra": "allow"}
 
 
 class RollingReq(BaseModel):
-    request_id: str
+    ID: str | int | None = None
     prompt: str
+    eval_request_type: str = "loglikelihood_rolling"
     model_config = {"extra": "allow"}
 
 
@@ -83,19 +84,22 @@ async def health():
     elapsed = time.monotonic() - _start_time
     if elapsed < WARMUP_S:
         return JSONResponse(status_code=503, content={"status": "warming_up"})
-    return {"status": "ok"}
+    return {"status": "ok", "uptime": elapsed}
 
 
-@app.get("/status")
-async def status():
+@app.get("/stats")
+async def stats():
     return {
-        "running": {
-            "decode_tokens_remaining": _inflight_tokens,
-            "task_count": _inflight,
-        },
-        "waiting": {
-            "compute_tokens_remaining": 0,
-            "task_count": 0,
+        "status": "ok",
+        "queue_stats": {
+            "running": {
+                "decode_tokens_remaining": _inflight_tokens,
+                "task_count": _inflight,
+            },
+            "waiting": {
+                "compute_tokens_remaining": 0,
+                "task_count": 0,
+            },
         },
     }
 
@@ -104,8 +108,9 @@ async def status():
 async def generate(req: GenerateReq):
     global _inflight, _inflight_tokens
 
-    if req.request_id in _cache:
-        return _cache[req.request_id]
+    cache_key = str(req.ID)
+    if cache_key in _cache:
+        return _cache[cache_key]
 
     _inflight += 1
     _inflight_tokens += req.max_tokens
@@ -114,13 +119,10 @@ async def generate(req: GenerateReq):
         await asyncio.sleep(delay)
 
         resp = {
-            "id": req.request_id,
+            "ID": req.ID,
             "text": f"stub response for {req.prompt[:50]}",
-            "finish_reason": "stop",
-            "prompt_tokens": len(req.prompt) // 4,
-            "completion_tokens": req.max_tokens,
         }
-        _cache[req.request_id] = resp
+        _cache[cache_key] = resp
         return resp
     finally:
         _inflight -= 1
@@ -129,34 +131,33 @@ async def generate(req: GenerateReq):
 
 @app.post("/loglikelihood")
 async def loglikelihood(req: LoglikelihoodReq):
-    if req.request_id in _cache:
-        return _cache[req.request_id]
+    cache_key = str(req.ID)
+    if cache_key in _cache:
+        return _cache[cache_key]
 
     await asyncio.sleep(PREFILL_LATENCY_S)
 
     resp = {
-        "id": req.request_id,
+        "ID": req.ID,
         "accuracy": -random.uniform(0.5, 5.0),
-        "prompt_tokens": len(req.prompt) // 4,
-        "continuation_tokens": len(req.continuation) // 4,
     }
-    _cache[req.request_id] = resp
+    _cache[cache_key] = resp
     return resp
 
 
 @app.post("/loglikelihood_rolling")
 async def loglikelihood_rolling(req: RollingReq):
-    if req.request_id in _cache:
-        return _cache[req.request_id]
+    cache_key = str(req.ID)
+    if cache_key in _cache:
+        return _cache[cache_key]
 
     await asyncio.sleep(PREFILL_LATENCY_S)
 
     resp = {
-        "id": req.request_id,
+        "ID": req.ID,
         "accuracy": -random.uniform(50, 500),
-        "prompt_tokens": len(req.prompt) // 4,
     }
-    _cache[req.request_id] = resp
+    _cache[cache_key] = resp
     return resp
 
 

@@ -27,9 +27,12 @@ async def test_health_not_ready(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_status(client):
-    respx.get("http://mock:8000/status").mock(return_value=httpx.Response(200, json={
-        "running": {"decode_tokens_remaining": 1785, "task_count": 8},
-        "waiting": {"compute_tokens_remaining": 0, "task_count": 0},
+    respx.get("http://mock:8000/stats").mock(return_value=httpx.Response(200, json={
+        "status": "ok",
+        "queue_stats": {
+            "running": {"decode_tokens_remaining": 1785, "task_count": 8},
+            "waiting": {"compute_tokens_remaining": 0, "task_count": 0},
+        },
     }))
     stats = await client.status()
     assert stats.running.decode_tokens_remaining == 1785
@@ -40,8 +43,7 @@ async def test_status(client):
 @pytest.mark.asyncio
 async def test_generate(client):
     respx.post("http://mock:8000/generate").mock(return_value=httpx.Response(200, json={
-        "id": "req_1", "text": "42", "finish_reason": "stop",
-        "prompt_tokens": 10, "completion_tokens": 1,
+        "ID": "req_1", "text": "42",
     }))
     result = await client.generate(
         request_id="req_1", prompt="What is 6*7?",
@@ -55,20 +57,22 @@ async def test_generate(client):
 @pytest.mark.asyncio
 async def test_loglikelihood(client):
     respx.post("http://mock:8000/loglikelihood").mock(return_value=httpx.Response(200, json={
-        "id": "req_2", "accuracy": -2.345, "prompt_tokens": 100, "continuation_tokens": 4,
+        "ID": "req_2", "accuracy": -2.345,
     }))
     result = await client.loglikelihood(request_id="req_2", prompt="Context", continuation="choice A")
     assert result["accuracy"] == pytest.approx(-2.345)
+    assert result["id"] == "req_2"
 
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_loglikelihood_rolling(client):
     respx.post("http://mock:8000/loglikelihood_rolling").mock(return_value=httpx.Response(200, json={
-        "id": "req_3", "accuracy": -1234.56, "prompt_tokens": 4096,
+        "ID": "req_3", "accuracy": -1234.56,
     }))
     result = await client.loglikelihood_rolling(request_id="req_3", prompt="A long doc...")
     assert result["accuracy"] == pytest.approx(-1234.56)
+    assert result["id"] == "req_3"
 
 
 @respx.mock
