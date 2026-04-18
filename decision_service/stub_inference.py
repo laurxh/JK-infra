@@ -79,9 +79,10 @@ class RollingReq(BaseModel):
 
 @app.get("/health")
 async def health():
+    from fastapi.responses import JSONResponse
     elapsed = time.monotonic() - _start_time
     if elapsed < WARMUP_S:
-        return {"status": "warming_up"}
+        return JSONResponse(status_code=503, content={"status": "warming_up"})
     return {"status": "ok"}
 
 
