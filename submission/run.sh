@@ -24,17 +24,8 @@ export TEAM_NAME="${TEAM_NAME:-team_jk}"
 
 # ---------- 1. 启动推理引擎（队友的代码） ----------
 echo "[run.sh] Starting inference engine..."
-
-# >>>>>> TODO: 替换为队友的实际启动命令 <<<<<<
-# 示例（vLLM）：
-#   python -m vllm.entrypoints.openai.api_server \
-#     --model "$MODEL_PATH" --tensor-parallel-size 4 \
-#     --port 8000 &
-# 示例（自研 nanovllm）：
-#   python -m engine.server --model-path "$MODEL_PATH" --port 8000 &
-echo "[run.sh] WARNING: 推理引擎启动命令未配置，请编辑 run.sh 第 30 行"
-# INFERENCE_PID=$!
-# >>>>>> END TODO <<<<<<
+python server_qwen3_32b --model "$MODEL_PATH" --host 0.0.0.0 &
+INFERENCE_PID=$!
 
 # ---------- 2. 等推理引擎就绪（最多 55 秒） ----------
 echo "[run.sh] Waiting for inference engine at $INFERENCE_URL ..."
