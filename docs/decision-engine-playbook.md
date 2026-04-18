@@ -69,7 +69,7 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 
 | 参数 | 值 | 位置 | 可信度 |
 |---|---|---|---|
-| `MAX_ENGINE_TASKS` | 8 | admission.py | 来自队友（并发 8），需要真机标定 |
+| `MAX_ENGINE_TASKS` | 16 (default) | config.py `max_engine_tasks` | **必须在真机标定**——取决于 KV cache / 模型 / sequence 长度 |
 | `HIGH_REWARD_THRESHOLD` | 1000.0 | admission.py | 拍的，需要看真实 reward 分布 |
 | `staleness_s` | 60.0 | candidate_pool.py | 保守值（TTL 300s，60s 内决定） |
 | `MAX_PICKS_PER_ROUND` | 5 | admission.py | 一轮最多 ask 5 个 |
@@ -116,7 +116,7 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 | **/ask 后修正 inflight token** | admission 用默认 256 估 | /ask 后从 messages 提取真实 max_gen_toks，更新 inflight |
 | **正确率冷启动** | history_store 全部 0.5 | 按 request_type 给不同初值；或前 N 个任务无条件接 |
 | **HIGH_REWARD_THRESHOLD 不准** | 硬编码 1000 | 需要看真实 reward 分布后标定 |
-| **MAX_ENGINE_TASKS 是否准确** | 硬编码 8 | 真机可能不同；应从 /status 动态推断或配置化 |
+| **MAX_ENGINE_TASKS 需要标定** | 默认 16，不知道真实上限 | 真机上用不同值跑，观察 /status 的 waiting.task_count 是否长期 >0（说明塞太多了） |
 
 ### 3.3 🟢 P2 — 后续优化
 
