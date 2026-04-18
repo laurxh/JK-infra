@@ -85,7 +85,7 @@ class DecisionEngine:
         )
 
     def _candidate_profiles(self, overview: TaskOverview) -> list[ExecutionProfile]:
-        task_lower = overview.eval_task_name.lower()
+        task_lower = (overview.eval_task_name or "").lower()
         if any(m in task_lower for m in MATH_TASK_NAMES):
             return [ExecutionProfile.CHAT_THINK, ExecutionProfile.CHAT_NO_THINK, ExecutionProfile.RAW]
         return [ExecutionProfile.CHAT_NO_THINK, ExecutionProfile.RAW]

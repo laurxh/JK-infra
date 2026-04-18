@@ -28,13 +28,13 @@ class PlatformClient:
         data = resp.json()
         return TaskOverview(
             task_id=data["task_id"],
-            target_sla=data["target_sla"],
-            target_reward=data["target_reward"],
-            max_winners=data["max_winners"],
-            eval_task_name=data["eval_task_name"],
-            eval_request_type=data["eval_request_type"],
-            eval_sampling_param=data.get("eval_sampling_param", ""),
-            eval_timeout_s=data["eval_timeout_s"],
+            target_sla=data.get("target_sla") or "Bronze",
+            target_reward=data.get("target_reward") or 1.0,
+            max_winners=data.get("max_winners") or 1,
+            eval_task_name=data.get("eval_task_name") or "unknown",
+            eval_request_type=data.get("eval_request_type") or "generate_until",
+            eval_sampling_param=data.get("eval_sampling_param") or "",
+            eval_timeout_s=data.get("eval_timeout_s") or 600,
         )
 
     async def ask(self, task_id: int, sla: str) -> dict:
