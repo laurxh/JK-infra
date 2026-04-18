@@ -89,16 +89,16 @@ class ExecutionScheduler:
                 _msg_start = time.monotonic()
                 if rt == "generate_until":
                     gen_kwargs = msg.get("eval_gen_kwargs") or {}
-                    sampling = self._cfg.sampling(task.eval_sampling_param) if task.eval_sampling_param else {}
+                    # Q98: eval_gen_kwargs contains ALL sampling params
                     result = await self._inference.generate(
                         request_id=req_id, prompt=rendered,
                         max_tokens=gen_kwargs.get("max_gen_toks", 256),
-                        temperature=gen_kwargs.get("temperature", sampling.get("temperature", 0.0)),
-                        top_p=gen_kwargs.get("top_p", sampling.get("top_p", 1.0)),
-                        top_k=sampling.get("top_k", 1),
-                        repetition_penalty=sampling.get("repetition_penalty", 1.0),
-                        frequency_penalty=sampling.get("frequency_penalty", 0.0),
-                        presence_penalty=sampling.get("presence_penalty", 0.0),
+                        temperature=gen_kwargs.get("temperature", 0.0),
+                        top_p=gen_kwargs.get("top_p", 1.0),
+                        top_k=gen_kwargs.get("top_k", 1),
+                        repetition_penalty=gen_kwargs.get("repetition_penalty", 1.0),
+                        frequency_penalty=gen_kwargs.get("frequency_penalty", 0.0),
+                        presence_penalty=gen_kwargs.get("presence_penalty", 0.0),
                         stop=gen_kwargs.get("until", []),
                     )
                     msg["response"] = result.get("text", "")

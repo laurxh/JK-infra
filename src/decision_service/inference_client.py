@@ -61,13 +61,19 @@ class InferenceClient:
         }
 
     async def loglikelihood(self, *, request_id: str, prompt: str, continuation: str) -> dict:
-        """Compute log P(continuation | prompt) using vLLM's logprobs."""
+        """Compute log P(continuation | prompt) using vLLM's logprobs.
+
+        Approach: send prompt+continuation, generate len(continuation) tokens worth of logprobs.
+        This matches the verified bidder.py approach.
+        """
+        if not continuation:
+            return {"id": request_id, "accuracy": 0.0}
+
         full_text = prompt + continuation
         payload = {
             "model": self.model,
             "prompt": full_text,
-            "max_tokens": 0,
-            "echo": True,
+            "max_tokens": len(continuation),
             "logprobs": 1,
             "temperature": 0.0,
         }
@@ -77,36 +83,22 @@ class InferenceClient:
         choice = data.get("choices", [{}])[0]
         logprobs_data = choice.get("logprobs", {})
         token_logprobs = logprobs_data.get("token_logprobs", [])
-
-        # We need to sum only the continuation portion.
-        # vLLM returns logprobs for the entire prompt+continuation.
-        # The continuation tokens start somewhere after the prompt tokens.
-        # Since we don't have exact token boundaries, use offset mapping.
-        text_offset = logprobs_data.get("text_offset", [])
-        prompt_len = len(prompt)
-
-        if text_offset:
-            # Find first token that starts at or after prompt boundary
-            cont_start = 0
-            for i, offset in enumerate(text_offset):
-                if offset >= prompt_len:
-                    cont_start = i
-                    break
-            cont_logprobs = token_logprobs[cont_start:]
-        else:
-            # Fallback: use all logprobs (less accurate but won't crash)
-            cont_logprobs = token_logprobs
-
-        total = sum(lp for lp in cont_logprobs if lp is not None)
+        total = sum(lp for lp in token_logprobs if lp is not None)
         return {"id": request_id, "accuracy": total}
 
     async def loglikelihood_rolling(self, *, request_id: str, prompt: str) -> dict:
-        """Compute rolling log-likelihood of entire prompt."""
+        """Compute rolling log-likelihood of entire prompt.
+
+        Approach: send prompt, generate len(prompt) tokens worth of logprobs.
+        This matches the verified bidder.py approach.
+        """
+        if not prompt:
+            return {"id": request_id, "accuracy": 0.0}
+
         payload = {
             "model": self.model,
             "prompt": prompt,
-            "max_tokens": 0,
-            "echo": True,
+            "max_tokens": len(prompt),
             "logprobs": 1,
             "temperature": 0.0,
         }

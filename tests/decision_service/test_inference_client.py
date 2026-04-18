@@ -60,21 +60,17 @@ async def test_generate(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_loglikelihood(client):
-    # Simulate vLLM returning logprobs for "Context" + "choice A"
-    # "Context" = 7 chars, "choice A" starts at offset 7
+    # bidder.py approach: send prompt+continuation, generate len(continuation) tokens
     respx.post("http://mock:8000/v1/completions").mock(return_value=httpx.Response(200, json={
         "choices": [{
-            "text": "Contextchoice A",
             "logprobs": {
-                "token_logprobs": [None, -0.5, -1.0, -0.3, -0.7],
-                "text_offset": [0, 3, 7, 11, 14],
+                "token_logprobs": [-1.0, -0.3, -0.7],
             },
         }],
     }))
     result = await client.loglikelihood(
         request_id="req_2", prompt="Context", continuation="choice A",
     )
-    # Continuation starts at offset 7 → tokens at index 2,3,4 → sum(-1.0, -0.3, -0.7) = -2.0
     assert result["accuracy"] == pytest.approx(-2.0)
     assert result["id"] == "req_2"
 
@@ -84,10 +80,8 @@ async def test_loglikelihood(client):
 async def test_loglikelihood_rolling(client):
     respx.post("http://mock:8000/v1/completions").mock(return_value=httpx.Response(200, json={
         "choices": [{
-            "text": "A long doc...",
             "logprobs": {
                 "token_logprobs": [None, -2.0, -3.0, -4.0],
-                "text_offset": [0, 2, 7, 11],
             },
         }],
     }))

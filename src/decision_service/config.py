@@ -50,7 +50,7 @@ def load_config() -> DecisionConfig:
             contest = json.load(f)
 
     sla_levels = {
-        name: level["ttft_avg"]
+        name: level.get("max_latency") or level.get("ttft_avg") or 10.0
         for name, level in contest.get("sla_levels", {}).items()
     }
 

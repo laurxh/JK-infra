@@ -20,8 +20,6 @@ def test_load_config_from_env_and_file(tmp_path):
         "sampling_params": {
             "Deterministic": {"temperature": 0.0, "top_p": 1.0, "top_k": 1,
                               "repetition_penalty": 1.0, "frequency_penalty": 0.0, "presence_penalty": 0.0},
-            "Normal": {"temperature": 0.1, "top_p": 0.9, "top_k": 50,
-                       "repetition_penalty": 1.1, "frequency_penalty": 0.2, "presence_penalty": 0.2},
         },
     }
     cfg_path = tmp_path / "contest.json"
@@ -47,3 +45,24 @@ def test_load_config_from_env_and_file(tmp_path):
     finally:
         for k in env:
             os.environ.pop(k, None)
+
+
+def test_load_config_max_latency_key(tmp_path):
+    """Q121/Q124: real config uses max_latency not ttft_avg."""
+    contest_cfg = {
+        "sla_levels": {
+            "Gold": {"max_latency": 6.0},
+            "Supreme": {"max_latency": 0.5},
+        },
+        "sampling_params": {},
+    }
+    cfg_path = tmp_path / "contest.json"
+    cfg_path.write_text(json.dumps(contest_cfg))
+
+    os.environ["CONFIG_PATH"] = str(cfg_path)
+    try:
+        cfg = load_config()
+        assert cfg.sla_ttft("Gold") == 6.0
+        assert cfg.sla_ttft("Supreme") == 0.5
+    finally:
+        os.environ.pop("CONFIG_PATH", None)
