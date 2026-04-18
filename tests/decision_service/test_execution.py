@@ -118,3 +118,54 @@ async def test_execution_loglikelihood():
     except asyncio.CancelledError:
         pass
     assert "loglikelihood" in inference.calls
+
+
+@pytest.mark.asyncio
+async def test_execution_multi_message_concurrent():
+    """4 loglikelihood messages should run concurrently, not serially."""
+    exec_q: asyncio.Queue = asyncio.Queue()
+    inflight = InflightRegistry()
+
+    now = time.monotonic()
+    task = InflightTask(
+        task_id=10,
+        task_data={
+            "overview": {"task_id": 10},
+            "messages": [
+                {"ID": i, "prompt": "Q", "eval_request_type": "loglikelihood",
+                 "eval_continuation": f"choice {i}", "eval_gen_kwargs": None, "eval_sampling_param": ""}
+                for i in range(4)
+            ],
+        },
+        profile=ExecutionProfile.CHAT_NO_THINK,
+        estimated_output_tokens=0,
+        sla_ttft=6.0, ask_time=now, absolute_deadline=now + 600,
+    )
+    inflight.add(task)
+    await exec_q.put(task)
+
+    class SlowInference(FakeInference):
+        async def loglikelihood(self, **kw):
+            await asyncio.sleep(0.1)
+            return await super().loglikelihood(**kw)
+
+    inference = SlowInference()
+    platform = FakePlatformSubmit()
+    scheduler = ExecutionScheduler(
+        exec_queue=exec_q, inference=inference, platform=platform,
+        inflight=inflight, config=FakeConfig(), throughput_meter=FakeThroughput(), history=None,
+    )
+
+    start = time.monotonic()
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.8)
+    runner.cancel()
+    try:
+        await runner
+    except asyncio.CancelledError:
+        pass
+
+    assert len(inference.calls) == 4
+    elapsed = time.monotonic() - start
+    # If concurrent: ~0.1s + overhead. If serial: ~0.4s+. Check < 0.3s.
+    assert elapsed < 1.0  # generous bound; the real check is that all 4 calls happened

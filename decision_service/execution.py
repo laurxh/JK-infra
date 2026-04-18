@@ -42,9 +42,9 @@ class ExecutionScheduler:
 
     async def _execute_and_submit(self, task: InflightTask):
         task_data = task.task_data
-        start = time.monotonic()
+        messages = task_data.get("messages", [])
 
-        for msg in task_data.get("messages", []):
+        async def _infer_one(msg):
             rt = msg.get("eval_request_type", "")
             prompt = msg.get("prompt", "")
             rendered = render_prompt(prompt, task.profile)
@@ -67,31 +67,30 @@ class ExecutionScheduler:
                         stop=gen_kwargs.get("until", []),
                     )
                     msg["response"] = result.get("text", "")
-                    wall = time.monotonic() - start
                     self._throughput.record(
                         completion_tokens=result.get("completion_tokens", 0),
-                        wall_time_s=wall,
+                        wall_time_s=result.get("decode_ms", 0) / 1000.0 if result.get("decode_ms") else 0.1,
                     )
-
                 elif rt == "loglikelihood":
                     continuation = msg.get("eval_continuation", "")
                     result = await self._inference.loglikelihood(
                         request_id=req_id, prompt=rendered, continuation=continuation,
                     )
                     msg["accuracy"] = result.get("accuracy", 0.0)
-
                 elif rt == "loglikelihood_rolling":
                     result = await self._inference.loglikelihood_rolling(
                         request_id=req_id, prompt=rendered,
                     )
                     msg["accuracy"] = result.get("accuracy", 0.0)
-
             except Exception as e:
                 logger.error("Inference failed for %s: %s", req_id, e)
                 if rt == "generate_until":
                     msg["response"] = ""
                 else:
                     msg["accuracy"] = 0.0
+
+        if messages:
+            await asyncio.gather(*[_infer_one(msg) for msg in messages])
 
         elapsed = time.monotonic() - task.ask_time
         sla_met = elapsed <= task.sla_ttft
