@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_NAME="my_env"
+ENV_NAME="${ENV_NAME:-my_env}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11.14}"
 
 if ! command -v conda >/dev/null 2>&1; then
@@ -31,11 +31,10 @@ fi
 echo "[setup] creating conda env ${ENV_NAME}"
 conda create -n "${ENV_NAME}" "python=${PYTHON_VERSION}" -y
 
-conda activate "${ENV_NAME}"
-
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r "${ROOT_DIR}/requirements.txt"
+conda run -n "${ENV_NAME}" python -m pip install --upgrade pip setuptools wheel
+conda run -n "${ENV_NAME}" python -m pip install -r "${ROOT_DIR}/requirements.txt"
 
 echo "[setup] done"
 echo "[setup] entering conda env: ${ENV_NAME}"
+conda activate "${ENV_NAME}"
 exec "${SHELL:-/bin/bash}" --noprofile --norc -i
