@@ -30,7 +30,7 @@ class DecisionConfig:
     health_poll_interval_s: float = 1.0
     health_timeout_s: float = 55.0
     think_token_multiplier: float = 3.0
-    max_engine_tasks: int = 16              # engine batch concurrency limit; calibrate on real hardware
+    max_engine_tasks: int = 64              # matches engine --max-num-seqs 64
     high_reward_threshold: float = 1000.0   # reward above this → eligible for thinking profile
     max_picks_per_round: int = 5            # max candidates to /ask per selector round
     default_output_estimate: int = 256      # pre-ask output token estimate for generate_until
