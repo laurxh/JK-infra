@@ -30,7 +30,7 @@ class DecisionEngine:
         profile = ExecutionProfile.CHAT_NO_THINK
         if overview.eval_request_type == "loglikelihood_rolling":
             profile = ExecutionProfile.RAW
-        c_hat = self.history.expected_correctness(overview.eval_task_name, profile)
+        c_hat = self.history.expected_correctness(overview.eval_request_type, profile)
         ev = overview.target_reward * c_hat
         return AdmissionDecision(
             action=AdmissionAction.ASK_NOW,
@@ -61,7 +61,7 @@ class DecisionEngine:
             finish_s = backlog_s + self_s
             if finish_s * self.cfg.safety_margin > sla_ttft:
                 continue
-            c_hat = self.history.expected_correctness(overview.eval_task_name, profile)
+            c_hat = self.history.expected_correctness(overview.eval_request_type, profile)
             ev = overview.target_reward * c_hat
             feasible.append((profile, finish_s, ev))
 

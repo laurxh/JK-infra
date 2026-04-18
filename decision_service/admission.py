@@ -12,14 +12,7 @@ from decision_service.schemas import AdmissionAction, AdmissionDecision
 
 logger = logging.getLogger(__name__)
 
-# Engine concurrency limit — read from config
-# (actual limit depends on KV cache / model / sequence length, must be calibrated on real hardware)
-# Reward threshold for thinking mode
-HIGH_REWARD_THRESHOLD = 1000.0
-# Max candidates to /ask per selector round
-MAX_PICKS_PER_ROUND = 5
-# Default output token estimate (before /ask reveals real max_gen_toks)
-DEFAULT_OUTPUT_ESTIMATE = 256
+
 
 
 class AdmissionController:
@@ -63,7 +56,7 @@ class AdmissionController:
 
                 # 4. Pick best candidates
                 picks = self._pool.pick_best(
-                    max_picks=MAX_PICKS_PER_ROUND,
+                    max_picks=self._cfg.max_picks_per_round,
                     available_slots=available_slots,
                 )
 
@@ -158,7 +151,7 @@ class AdmissionController:
         sla = self._cfg.sla_ttft(overview.target_sla)
         reward = overview.target_reward
 
-        if sla >= 6.0 and reward >= HIGH_REWARD_THRESHOLD:
+        if sla >= 6.0 and reward >= self._cfg.high_reward_threshold:
             return ExecutionProfile.CHAT_THINK
         elif sla >= 4.0:
             return ExecutionProfile.CHAT_NO_THINK
@@ -178,7 +171,7 @@ class AdmissionController:
         """Pre-ask estimate. Will be corrected after /ask with real max_gen_toks."""
         if overview.eval_request_type != "generate_until":
             return 0
-        base = DEFAULT_OUTPUT_ESTIMATE
+        base = self._cfg.default_output_estimate
         if profile == ExecutionProfile.CHAT_THINK:
             base = int(base * self._cfg.think_token_multiplier)
         return base
