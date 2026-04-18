@@ -21,7 +21,7 @@ DEFAULT_MODEL_PATH = os.path.join(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Serve Qwen3-32B on GPUs 2,3,4,5 with serialized generation."
+        description="Serve Qwen3-32B with serialized generation."
     )
     parser.add_argument(
         "--host",
@@ -40,11 +40,6 @@ def parse_args():
         dest="model_path",
         default=DEFAULT_MODEL_PATH,
         help="Local Qwen3-32B model directory.",
-    )
-    parser.add_argument(
-        "--devices",
-        default="2,3,4,5",
-        help="Physical GPU ids exposed to the server process.",
     )
     parser.add_argument(
         "--max-model-len",
@@ -106,7 +101,6 @@ class GenerateTask:
 
 class GenerationWorker:
     def __init__(self, args):
-        os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
         from nanovllm import LLM, SamplingParams
 
         self._SamplingParams = SamplingParams
@@ -604,7 +598,7 @@ def main():
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     print(f"Serving Qwen3-32B on http://{args.host}:{args.port}")
-    print(f"CUDA_VISIBLE_DEVICES={args.devices}")
+    print(f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<not set>')}")
     print(
         "Engine config: "
         f"max_model_len={args.max_model_len}, "
