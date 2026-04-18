@@ -2,6 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_NAME="${ENV_NAME:-my_env}"
+
+if ! command -v conda >/dev/null 2>&1; then
+  echo "[run] conda not found in PATH"
+  exit 1
+fi
+
+CONDA_BASE="$(conda info --base)"
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${ENV_NAME}"
+echo "[run] activated conda env: ${ENV_NAME}"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 HOST="0.0.0.0"
