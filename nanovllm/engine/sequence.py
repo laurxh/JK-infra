@@ -26,8 +26,11 @@ class Sequence:
         self.num_new_tokens = 0
         self.block_table = []
         self.temperature = sampling_params.temperature
+        self.top_p = sampling_params.top_p
+        self.top_k = sampling_params.top_k
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.stop_token_ids = copy(sampling_params.stop_token_ids)
 
     def __len__(self):
         return self.num_tokens
@@ -82,10 +85,19 @@ class Sequence:
         self.num_tokens += 1
         assert self.num_tokens == len(self.token_ids)
 
+    def remove_last_tokens(self, count: int):
+        if count <= 0:
+            return
+        self.token_ids = self.token_ids[:-count]
+        self.num_tokens -= count
+        self.last_token = self.token_ids[-1]
+        assert self.num_tokens == len(self.token_ids)
+
     def __getstate__(self):
         return (self.token_ids, self.last_token, self.num_tokens, self.num_prompt_tokens, \
-                self.num_cached_tokens, self.num_new_tokens, self.block_table, self.temperature)
+                self.num_cached_tokens, self.num_new_tokens, self.block_table, self.temperature, \
+                self.top_p, self.top_k)
 
     def __setstate__(self, state):
         self.token_ids, self.last_token, self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, \
-            self.num_new_tokens, self.block_table, self.temperature = state
+            self.num_new_tokens, self.block_table, self.temperature, self.top_p, self.top_k = state

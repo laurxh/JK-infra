@@ -16,7 +16,7 @@ class Config:
     eos: int = -1
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
-    chunked_prefill: bool = False
+    chunked_prefill: bool = True
 
     def __post_init__(self):
         self.model = os.path.abspath(os.path.expanduser(self.model))
@@ -25,5 +25,7 @@ class Config:
         assert self.kvcache_block_size % 256 == 0
         assert 1 <= self.tensor_parallel_size <= 8
         self.hf_config = AutoConfig.from_pretrained(self.model, local_files_only=True)
-        self.max_model_len = min(self.max_model_len, self.hf_config.max_position_embeddings)
+        self.max_model_len = min(
+            self.max_model_len, self.hf_config.max_position_embeddings
+        )
         # assert self.max_num_batched_tokens >= self.max_model_len

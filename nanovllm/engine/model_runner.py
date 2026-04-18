@@ -1,6 +1,7 @@
 import pickle
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
@@ -191,12 +192,20 @@ class ModelRunner:
     def prepare_sample(self, seqs: list[Sequence]):
         context = get_context()
         temperatures = []
+        top_ps = []
+        top_ks = []
         for seq in seqs:
             temperatures.append(seq.temperature)
+            top_ps.append(seq.top_p)
+            top_ks.append(seq.top_k)
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
+        top_ps = torch.tensor(top_ps, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
+        top_ks = torch.tensor(top_ks, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         if context.seq_need_compute_logits.numel():
             temperatures = temperatures[context.seq_need_compute_logits]
-        return temperatures
+            top_ps = top_ps[context.seq_need_compute_logits]
+            top_ks = top_ks[context.seq_need_compute_logits]
+        return temperatures, top_ps, top_ks
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor):
@@ -239,12 +248,87 @@ class ModelRunner:
 
     def run(self, seqs: list[Sequence]) -> list[int]:
         input_ids, positions = self.prepare_model_input(seqs)
-        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+        sampling_tensors = self.prepare_sample(seqs) if self.rank == 0 else None
         logits = self.run_model(input_ids, positions)
-        token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
+        token_ids = self.sampler(logits, *sampling_tensors).tolist() if self.rank == 0 else None
         seq_need_compute_logits = get_context().seq_need_compute_logits
         reset_context()
         return token_ids, seq_need_compute_logits
+
+    @torch.inference_mode()
+    def score(self, token_id_seqs: list[list[int]], prompt_lens: list[int]) -> list[dict[str, float | int]] | None:
+        if not token_id_seqs:
+            return [] if self.rank == 0 else None
+
+        input_ids = []
+        positions = []
+        targets = []
+        cu_seqlens = [0]
+        total_input_tokens = 0
+        gather_ranges = []
+
+        for token_ids, prompt_len in zip(token_id_seqs, prompt_lens):
+            assert len(token_ids) >= 2, "Need at least 2 tokens to score continuation"
+            assert 1 <= prompt_len < len(token_ids), "prompt_len must be in [1, len(token_ids) - 1]"
+            seq_input_ids = token_ids[:-1]
+            seq_targets = token_ids[1:]
+            seq_len = len(seq_input_ids)
+            start = total_input_tokens + (prompt_len - 1)
+            end = total_input_tokens + seq_len
+            gather_ranges.append((start, end, len(token_ids) - prompt_len))
+            input_ids.extend(seq_input_ids)
+            targets.extend(seq_targets)
+            positions.extend(range(seq_len))
+            total_input_tokens += seq_len
+            cu_seqlens.append(total_input_tokens)
+
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        targets = torch.tensor(targets, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.full((total_input_tokens,), -1, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(
+            [len(token_ids) - 1 for token_ids in token_id_seqs],
+            dtype=torch.int32,
+            pin_memory=True,
+        ).cuda(non_blocking=True)
+        seq_need_compute_logits = torch.empty(0, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+
+        set_context(
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max(len(token_ids) - 1 for token_ids in token_id_seqs),
+            max_seqlen_k=max(len(token_ids) - 1 for token_ids in token_id_seqs),
+            slot_mapping=slot_mapping,
+            context_lens=context_lens,
+            block_tables=None,
+            seq_need_compute_logits=seq_need_compute_logits,
+        )
+        hidden_states = self.model(input_ids, positions)
+        logits = F.linear(hidden_states, self.model.lm_head.weight)
+        if self.world_size > 1:
+            all_logits = [torch.empty_like(logits) for _ in range(self.world_size)] if self.rank == 0 else None
+            dist.gather(logits, all_logits, 0)
+            logits = torch.cat(all_logits, dim=-1) if self.rank == 0 else None
+        if self.rank != 0:
+            reset_context()
+            return None
+
+        log_probs = F.log_softmax(logits.float(), dim=-1)
+        token_log_probs = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        results = []
+        for start, end, continuation_len in gather_ranges:
+            continuation_log_probs = token_log_probs[start:end]
+            total_logprob = float(continuation_log_probs.sum().item())
+            results.append(
+                {
+                    "loglikelihood": total_logprob,
+                    "num_tokens": continuation_len,
+                    "avg_loglikelihood": total_logprob / continuation_len if continuation_len > 0 else 0.0,
+                }
+            )
+        reset_context()
+        return results
 
     @torch.inference_mode()
     def capture_cudagraph(self):
