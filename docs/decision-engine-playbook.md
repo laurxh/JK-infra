@@ -9,35 +9,37 @@
 ## 1. 系统全景
 
 ```
-平台 (ubiservice)          决策服务 (decision_service/)           推理引擎 (队友)
+平台 (PLATFORM_URL)         决策服务 (decision_service/)           推理引擎 (server_qwen3_32b.py)
                      ┌─────────────────────────────────┐
   /query ──────────> │ A. QueryHarvester (去重, N并发)   │
                      │         ↓ overview_queue         │
                      │ B. AdmissionController           │
-                     │    DecisionEngine.decide()       │
-  /ask   <────────── │    → ask_now / drop              │
+                     │    CandidatePool + Selector 循环  │
+  /ask   <────────── │    → pick_best → /ask             │
                      │         ↓ exec_queue             │
                      │ C. ExecutionScheduler             │
-                     │    PromptRenderer → InferClient   │──> /generate
-  /submit <───────── │    填 message → submit            │──> /loglikelihood
-                     │                                   │──> /loglikelihood_rolling
-                     │ EngineStatsPoller (200ms)         │──> /status
-                     └─────────────────────────────────┘    /health
+                     │    PromptRenderer → InferClient   │──> POST /generate
+  /submit <───────── │    asyncio.gather → submit        │──> POST /loglikelihood
+                     │    _deadline_watcher (600s 兜底)  │──> POST /loglikelihood_rolling
+                     │ EngineStatsPoller (200ms)         │──> GET  /stats
+                     └─────────────────────────────────┘    GET  /health
 ```
 
 **关键文件**：
-- `decision_engine.py` — 决策核心，纯函数，~100 行
-- `admission.py` — 把决策结果执行出去（/ask），~80 行
-- `execution.py` — 推理 + 提交，~100 行
-- `config.py` — 超参，`DecisionConfig` dataclass
-- `schemas.py` — 所有数据结构
-- `docs/inference-contract.md` — 与推理引擎的接口契约 v1.0
+- `admission.py` — 候选池 + selector 循环 + 引擎门控 + profile 选择，~120 行
+- `candidate_pool.py` — 分桶 + reward 排序，~60 行
+- `execution.py` — 并发推理 + submit + deadline watcher，~120 行
+- `config.py` — 所有超参，`DecisionConfig` dataclass
+- `schemas.py` — 数据结构
+- `inference_client.py` — 对齐队友 `server_qwen3_32b.py` 的 5 个 HTTP 接口
+- `prompt_renderer.py` — chat template 渲染（engine 不套 template）
+- `decision_engine.py` — 旧版决策逻辑（目前未被 admission 使用，保留备用）
 
 ---
 
 ## 2. 当前决策逻辑（v1 — 2026-04-18 候选池版）
 
-### 2.1 架构变化：从"逐条判断"到"攒池挑最好"
+### 2.1 Selector 循环
 
 ```
 QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
@@ -46,7 +48,7 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
                                          ↓
                                    Selector 循环（100ms 一轮）：
                                      1. purge_stale()
-                                     2. 检查引擎门控：stats.total_tasks + inflight.count < MAX_ENGINE_TASKS(8)
+                                     2. 检查引擎门控：GET /stats → stats.total_tasks < max_engine_tasks
                                      3. pick_best(max=5, slots=available)
                                         → 优先级：loglikelihood > loglikelihood_rolling > generate_until
                                         → 同类型按 reward 降序
@@ -62,18 +64,18 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 | generate_until + 宽 SLA(≥6s) + 高 reward | 接 | chat_think |
 | generate_until + 中 SLA(≥4s) | 接 | chat_no_think |
 | generate_until + 紧 SLA(<4s) | 接但轻量 | raw |
-| 任何类型 + 引擎满（≥8 tasks + inflight） | 不接（留在池里等） | — |
+| 任何类型 + 引擎满（stats.total_tasks ≥ max_engine_tasks） | 不接（留在池里等） | — |
 | 任何类型 + 候选过期（>60s） | 清理 | — |
 
 ### 2.3 关键常数
 
 | 参数 | 值 | 位置 | 可信度 |
 |---|---|---|---|
-| `MAX_ENGINE_TASKS` | 16 (default) | config.py `max_engine_tasks` | **必须在真机标定**——取决于 KV cache / 模型 / sequence 长度 |
-| `HIGH_REWARD_THRESHOLD` | 1000.0 | admission.py | 拍的，需要看真实 reward 分布 |
-| `staleness_s` | 60.0 | candidate_pool.py | 保守值（TTL 300s，60s 内决定） |
-| `MAX_PICKS_PER_ROUND` | 5 | admission.py | 一轮最多 ask 5 个 |
-| `DEFAULT_OUTPUT_ESTIMATE` | 256 | admission.py | 粗估，/ask 后可用真实 max_gen_toks 修正 |
+| `max_engine_tasks` | 16 (default) | config.py | **必须在真机标定**——队友 server 用 `--max-num-seqs 64`，但实际并发取决于 KV cache |
+| `high_reward_threshold` | 1000.0 | config.py | 拍的，需要看真实 reward 分布 |
+| `staleness_s` | 60.0 | candidate_pool.py | 保守值（任务 TTL 300s，60s 内决定） |
+| `max_picks_per_round` | 5 | config.py | 一轮最多 ask 5 个 |
+| `default_output_estimate` | 256 | config.py | 粗估，/ask 后用真实 max_gen_toks 修正 |
 | `think_token_multiplier` | 3.0 | config.py | 拍的 |
 | `DEADLINE_MARGIN_S` | 30 | execution.py | 绝对超时前 30s 强制 submit |
 
@@ -130,17 +132,66 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 
 ---
 
-## 4. 与推理引擎的接口
+## 4. 推理引擎接口（以 `server_qwen3_32b.py` 为准）
 
-详见 `docs/inference-contract.md`（v1.0 定稿）。核心要点：
+启动：`python server_qwen3_32b.py --model-path $MODEL_PATH --port 8000 [--max-num-seqs 64] [--gpu-memory-utilization 0.95]`
 
-- 5 个 HTTP 接口：`/health`, `/stats`（注意不是 /status）, `/generate`, `/loglikelihood`, `/loglikelihood_rolling`
-- **字段名**：请求用 `ID`（不是 request_id），loglikelihood 用 `eval_continuation`（不是 continuation）
-- **/stats 响应**：嵌套在 `queue_stats` 下：`{status, queue_stats: {running: {...}, waiting: {...}}}`
-- **/stats.total_tasks 是 message 级的请求数**（不是 platform task 数）——一个 4 选 1 loglikelihood = 4 个 engine tasks
-- engine 不套 chat template，决策侧用 `tokenizer.apply_chat_template(tokenize=False)` 渲染 prompt 字符串
-- `ID` 幂等（同 ID 返回上次结果）
-- engine 是 prefill 优先调度（logprob 任务抢占 generate 的 decode）
+### GET /health
+
+```json
+{"status": "ok", "uptime": 123.45}
+```
+
+### GET /stats
+
+```json
+{
+  "status": "ok",
+  "queue_stats": {
+    "running": {"task_count": 2, "decode_tokens_remaining": 128},
+    "waiting": {"task_count": 5, "compute_tokens_remaining": 4096}
+  }
+}
+```
+
+- `total_tasks = running.task_count + waiting.task_count`（message 级，不是 platform task 级）
+- 决策服务 200ms 轮询一次
+
+### POST /generate
+
+请求：
+```json
+{"ID": 1, "prompt": "...", "temperature": 0.0, "max_tokens": 256, "top_p": 1.0, "top_k": 1, "stop": ["\n\n"]}
+```
+- `max_tokens` 或 `max_gen_toks` 都接受
+- `stop` 或 `until` 都接受
+
+响应：`{"ID": 1, "text": " 5"}`
+
+### POST /loglikelihood
+
+请求：
+```json
+{"ID": 0, "prompt": "...", "eval_continuation": " Paris", "eval_request_type": "loglikelihood"}
+```
+
+响应：`{"ID": 0, "accuracy": -3.27}`
+
+### POST /loglikelihood_rolling
+
+请求：
+```json
+{"ID": 0, "prompt": "...", "eval_request_type": "loglikelihood_rolling"}
+```
+
+响应：`{"ID": 0, "accuracy": -123.45}`
+
+### 关键约定
+
+- **ID 字段**：请求用 `ID`，响应回显 `ID`。`inference_client.py` 内部 normalize 成 `id`
+- **engine 不套 chat template**：决策侧用 `tokenizer.apply_chat_template(tokenize=False)` 渲染后塞 prompt
+- **prefill 优先调度**：loglikelihood 类任务抢占 generate 的 decode
+- **engine 超时**：`--queue-timeout 600`（默认），超时返回 504
 
 ---
 
@@ -173,3 +224,5 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 | 2026-04-18 | 加 null 字段防御 | ubiservice mock 返回 eval_task_name=null |
 | 2026-04-18 | **v1 候选池版** | 候选池+分桶+引擎门控 替代逐条公式；多message并发；600s兜底watcher；profile不靠task_name |
 | 2026-04-18 | **P1 完成** | /ask后修正inflight token；冷启动按request_type分初值；超参配置化 |
+| 2026-04-18 | **对齐队友真实 API** | /stats(非/status)、ID(非request_id)、eval_continuation(非continuation)；修复双重计数 |
+| 2026-04-18 | **Playbook 全面修订** | 统一到队友 server_qwen3_32b.py 的真实接口；修 run.sh/setup.sh |

@@ -10,7 +10,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/.."
 
 # ---------- 如果有 setup.sh 创建的虚拟环境，先激活 ----------
 if [ -f /tmp/contestant_env/bin/activate ]; then
@@ -18,19 +18,25 @@ if [ -f /tmp/contestant_env/bin/activate ]; then
 fi
 
 # ---------- 默认值 ----------
-export INFERENCE_URL="${INFERENCE_URL:-http://127.0.0.1:8000}"
+INFERENCE_PORT=8000
+export INFERENCE_URL="${INFERENCE_URL:-http://127.0.0.1:${INFERENCE_PORT}}"
 export TOKEN="${TOKEN:-team_jk_token}"
 export TEAM_NAME="${TEAM_NAME:-team_jk}"
 
-# ---------- 1. 启动推理引擎（队友的代码） ----------
+# ---------- 1. 启动推理引擎 ----------
 echo "[run.sh] Starting inference engine..."
-python server_qwen3_32b --model "$MODEL_PATH" --host 0.0.0.0 &
+python server_qwen3_32b.py \
+    --model-path "${MODEL_PATH}" \
+    --host 0.0.0.0 \
+    --port "${INFERENCE_PORT}" \
+    --gpu-memory-utilization 0.95 \
+    &
 INFERENCE_PID=$!
 
 # ---------- 2. 等推理引擎就绪（最多 55 秒） ----------
 echo "[run.sh] Waiting for inference engine at $INFERENCE_URL ..."
 for i in $(seq 1 55); do
-    if curl -s -o /dev/null -w "%{http_code}" "$INFERENCE_URL/health" | grep -q "200"; then
+    if curl -s -o /dev/null -w "%{http_code}" "$INFERENCE_URL/health" 2>/dev/null | grep -q "200"; then
         echo "[run.sh] Inference engine ready (${i}s)"
         break
     fi
@@ -43,13 +49,12 @@ done
 
 # ---------- 3. 启动决策服务 ----------
 echo "[run.sh] Starting decision service..."
-export PYTHONPATH="${SCRIPT_DIR}/.."
+export PYTHONPATH="$(pwd)"
 python -m decision_service.app &
 DECISION_PID=$!
 echo "[run.sh] Decision service started (PID=$DECISION_PID)"
 
 # ---------- 4. 等待退出 ----------
-# 平台用 Ctrl+C / SIGTERM 停止整个服务
-trap "echo '[run.sh] Shutting down...'; kill $DECISION_PID 2>/dev/null; exit 0" SIGTERM SIGINT
+trap "echo '[run.sh] Shutting down...'; kill $DECISION_PID $INFERENCE_PID 2>/dev/null; exit 0" SIGTERM SIGINT
 
 wait $DECISION_PID
