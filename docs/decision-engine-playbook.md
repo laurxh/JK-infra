@@ -109,14 +109,14 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 | ~~多 message 串行~~ | asyncio.gather 并发推理 |
 | ~~600s 超时无兜底~~ | deadline_watcher 每 5s 检查，<30s 强制 submit |
 
-### 3.2 🟡 P1 — 显著影响得分
+### 3.2 ✅ 已解决（P1 — 2026-04-18）
 
-| 问题 | 现状 | 改法 |
-|---|---|---|
-| **/ask 后修正 inflight token** | admission 用默认 256 估 | /ask 后从 messages 提取真实 max_gen_toks，更新 inflight |
-| **正确率冷启动** | history_store 全部 0.5 | 按 request_type 给不同初值；或前 N 个任务无条件接 |
-| **HIGH_REWARD_THRESHOLD 不准** | 硬编码 1000 | 需要看真实 reward 分布后标定 |
-| **MAX_ENGINE_TASKS 需要标定** | 默认 16，不知道真实上限 | 真机上用不同值跑，观察 /status 的 waiting.task_count 是否长期 >0（说明塞太多了） |
+| 问题 | 解决方案 |
+|---|---|
+| ~~/ask 后 inflight token 不修正~~ | admission.py 提取真实 max_gen_toks 回写 inflight_registry |
+| ~~正确率冷启动全 0.5~~ | history_store 按 request_type 分初值（ll=0.7, gen=0.5, llr=0.6），键改为 (request_type, profile) |
+| ~~HIGH_REWARD_THRESHOLD 硬编码~~ | 搬到 DecisionConfig，连同 max_picks_per_round、default_output_estimate |
+| **MAX_ENGINE_TASKS 需要标定** | 默认 16，不知道真实上限。真机上用不同值跑，观察 /status 的 waiting.task_count 是否长期 >0 |
 
 ### 3.3 🟢 P2 — 后续优化
 
@@ -169,3 +169,4 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 | 2026-04-18 | v0 初版上线 | 三层架构 + fast/slow path + profile 选择 |
 | 2026-04-18 | 加 null 字段防御 | ubiservice mock 返回 eval_task_name=null |
 | 2026-04-18 | **v1 候选池版** | 候选池+分桶+引擎门控 替代逐条公式；多message并发；600s兜底watcher；profile不靠task_name |
+| 2026-04-18 | **P1 完成** | /ask后修正inflight token；冷启动按request_type分初值；超参配置化 |
