@@ -113,6 +113,16 @@ class AdmissionController:
                         absolute_deadline=now + (overview.eval_timeout_s or 600),
                     )
                     self._inflight.add(inflight_task)
+
+                    # Correct token estimate with real max_gen_toks from task data
+                    if overview.eval_request_type == "generate_until":
+                        real_max = self._extract_max_gen_toks(task_data)
+                        if real_max is not None:
+                            corrected = real_max
+                            if profile == ExecutionProfile.CHAT_THINK:
+                                corrected = int(real_max * self._cfg.think_token_multiplier)
+                            self._inflight.update_estimate(overview.task_id, corrected)
+
                     await self._exec_q.put(inflight_task)
                     logger.info("ACCEPTED task %d profile=%s reward=%.0f",
                                 overview.task_id, profile.value, overview.target_reward)
@@ -154,6 +164,15 @@ class AdmissionController:
             return ExecutionProfile.CHAT_NO_THINK
         else:
             return ExecutionProfile.RAW
+
+    @staticmethod
+    def _extract_max_gen_toks(task_data: dict) -> int | None:
+        """Extract max_gen_toks from the first generate_until message in task data."""
+        for msg in task_data.get("messages", []):
+            gen_kwargs = msg.get("eval_gen_kwargs")
+            if gen_kwargs and "max_gen_toks" in gen_kwargs:
+                return gen_kwargs["max_gen_toks"]
+        return None
 
     def _estimate_output_tokens(self, overview: TaskOverview, profile: ExecutionProfile) -> int:
         """Pre-ask estimate. Will be corrected after /ask with real max_gen_toks."""

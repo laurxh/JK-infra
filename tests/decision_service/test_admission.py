@@ -169,3 +169,46 @@ async def test_admission_loglikelihood_gets_correct_profile():
     assert exec_q.qsize() == 1
     inflight_task = await exec_q.get()
     assert inflight_task.profile == ExecutionProfile.CHAT_NO_THINK
+
+
+@pytest.mark.asyncio
+async def test_admission_corrects_inflight_after_ask():
+    """After /ask, real max_gen_toks should correct the inflight estimate."""
+    overview_q: asyncio.Queue = asyncio.Queue()
+    exec_q: asyncio.Queue = asyncio.Queue()
+    await overview_q.put(_make_overview(task_id=1, request_type="generate_until", reward=5.0))
+
+    cfg = _make_config()
+
+    class PlatformWithRealTokens:
+        asked = []
+        async def ask(self, task_id, sla):
+            self.asked.append(task_id)
+            return {"status": "accepted", "task": {
+                "overview": {}, "messages": [{
+                    "ID": 0, "prompt": "test",
+                    "eval_request_type": "generate_until",
+                    "eval_gen_kwargs": {"max_gen_toks": 64, "until": ["\n"], "temperature": 0.0, "top_p": 1.0},
+                }]
+            }}
+
+    inflight = InflightRegistry()
+    platform = PlatformWithRealTokens()
+    ctrl = AdmissionController(
+        overview_queue=overview_q, exec_queue=exec_q,
+        platform=platform, stats_poller=FakeStatsPoller(),
+        throughput_meter=FakeThroughputMeter(),
+        inflight=inflight, config=cfg,
+    )
+    task = asyncio.create_task(ctrl.run())
+    await asyncio.sleep(0.3)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert exec_q.qsize() == 1
+    # The inflight task should have corrected estimate (64, not default 256)
+    inflight_task = inflight.get(1) or (await exec_q.get())
+    assert inflight_task.estimated_output_tokens == 64

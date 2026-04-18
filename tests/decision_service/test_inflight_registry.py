@@ -66,3 +66,17 @@ def test_dedup():
     reg.add(t)
     reg.add(t)
     assert reg.count == 1
+
+
+def test_update_estimate():
+    reg = InflightRegistry()
+    t = _make_task(1, est_tokens=256)
+    reg.add(t)
+    assert reg.total_estimated_output_tokens == 256
+    reg.update_estimate(1, 100)
+    assert reg.total_estimated_output_tokens == 100
+
+
+def test_update_estimate_nonexistent():
+    reg = InflightRegistry()
+    reg.update_estimate(999, 100)  # should not raise
