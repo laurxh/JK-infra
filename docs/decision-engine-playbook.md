@@ -81,15 +81,15 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 
 ### 2.4 Profile 选择
 
-**不依赖 eval_task_name**（该字段不可靠）。基于强特征：
+**官方参考锚点**：raw prompt（不套 chat template）+ thinking mode on。
 
-| 条件 | Profile |
-|---|---|
-| request_type = loglikelihood | chat_no_think |
-| request_type = loglikelihood_rolling | raw |
-| generate + SLA ≥ 6s + reward ≥ HIGH_REWARD_THRESHOLD | chat_think |
-| generate + SLA ≥ 4s | chat_no_think |
-| generate + SLA < 4s | raw |
+| 条件 | Profile | 原因 |
+|---|---|---|
+| loglikelihood | **raw** | 参考模型用 raw text 算 P(cont\|prompt)；套 template 改分布会导致 argmax 翻转 |
+| loglikelihood_rolling | **raw** | 定义就是对原文算 rolling log-likelihood |
+| generate_until | **raw**（当前默认） | 匹配参考锚点；TODO: 确认 engine 是否支持 raw + thinking mode |
+
+**待确认**：Qwen3 在不套 chat template 时能不能进 thinking mode？如果能（engine 侧全局开关），generate_until 高 reward 任务可以用 raw + think 提高正确率。如果不能，只能 raw completion 裸续写。
 
 ### 2.5 关键特性
 

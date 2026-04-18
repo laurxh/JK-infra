@@ -168,7 +168,7 @@ async def test_admission_loglikelihood_gets_correct_profile():
         pass
     assert exec_q.qsize() == 1
     inflight_task = await exec_q.get()
-    assert inflight_task.profile == ExecutionProfile.CHAT_NO_THINK
+    assert inflight_task.profile == ExecutionProfile.RAW
 
 
 @pytest.mark.asyncio

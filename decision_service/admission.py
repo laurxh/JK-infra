@@ -141,25 +141,26 @@ class AdmissionController:
                 break
 
     def _select_profile(self, overview: TaskOverview) -> ExecutionProfile:
-        """Select execution profile based on strong features (not task_name)."""
+        """Select execution profile.
+
+        Official reference anchor: raw prompt (no chat template) + thinking mode.
+        - loglikelihood / rolling: MUST be raw to match reference P(cont|prompt) distribution
+        - generate_until: default raw to match reference; chat_think only if we confirm
+          engine supports thinking in raw mode (pending teammate confirmation)
+        """
         rt = overview.eval_request_type or "generate_until"
 
-        # loglikelihood types — no thinking needed
+        # loglikelihood: raw — reference computed P(continuation|prompt) on raw text
+        # applying chat template changes the distribution and may flip argmax
         if rt == "loglikelihood":
-            return ExecutionProfile.CHAT_NO_THINK
+            return ExecutionProfile.RAW
         if rt == "loglikelihood_rolling":
             return ExecutionProfile.RAW
 
-        # generate_until — profile depends on SLA headroom + reward
-        sla = self._cfg.sla_ttft(overview.target_sla)
-        reward = overview.target_reward
-
-        if sla >= 6.0 and reward >= self._cfg.high_reward_threshold:
-            return ExecutionProfile.CHAT_THINK
-        elif sla >= 4.0:
-            return ExecutionProfile.CHAT_NO_THINK
-        else:
-            return ExecutionProfile.RAW
+        # generate_until: default raw to match reference anchor
+        # TODO: once we confirm engine-level thinking mode support,
+        # high-reward tasks can use thinking for better correctness
+        return ExecutionProfile.RAW
 
     @staticmethod
     def _extract_max_gen_toks(task_data: dict) -> int | None:
