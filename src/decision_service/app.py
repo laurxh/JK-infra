@@ -34,7 +34,7 @@ async def main():
     logger.info("Config loaded: platform=%s inference=%s team=%s", cfg.platform_url, cfg.inference_url, cfg.team_name)
 
     platform = PlatformClient(base_url=cfg.platform_url, token=cfg.token, team_name=cfg.team_name)
-    inference = InferenceClient(base_url=cfg.inference_url)
+    inference = InferenceClient(base_url=cfg.inference_url, model=cfg.model_path or cfg.model_name)
 
     await wait_for_engine(inference, cfg.health_timeout_s, cfg.health_poll_interval_s)
 
