@@ -107,6 +107,7 @@ class AdmissionController:
                         sla_ttft=self._cfg.sla_ttft(overview.target_sla),
                         ask_time=now,
                         absolute_deadline=now + (overview.eval_timeout_s or 600),
+                        eval_sampling_param=overview.eval_sampling_param or "",
                     )
                     self._inflight.add(inflight_task)
 

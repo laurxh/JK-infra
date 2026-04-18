@@ -88,9 +88,8 @@ class ExecutionScheduler:
             try:
                 _msg_start = time.monotonic()
                 if rt == "generate_until":
-                    gen_kwargs = msg.get("eval_gen_kwargs", {})
-                    sampling_name = msg.get("eval_sampling_param", "")
-                    sampling = self._cfg.sampling(sampling_name) if sampling_name else {}
+                    gen_kwargs = msg.get("eval_gen_kwargs") or {}
+                    sampling = self._cfg.sampling(task.eval_sampling_param) if task.eval_sampling_param else {}
                     result = await self._inference.generate(
                         request_id=req_id, prompt=rendered,
                         max_tokens=gen_kwargs.get("max_gen_toks", 256),

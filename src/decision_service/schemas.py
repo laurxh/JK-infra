@@ -62,6 +62,7 @@ class InflightTask:
     sla_ttft: float
     ask_time: float
     absolute_deadline: float
+    eval_sampling_param: str = ""
 
 
 @dataclass
