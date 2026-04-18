@@ -86,6 +86,7 @@ class ExecutionScheduler:
             req_id = f"t{task.task_id}_m{msg.get('ID', 0)}"
 
             try:
+                _msg_start = time.monotonic()
                 if rt == "generate_until":
                     gen_kwargs = msg.get("eval_gen_kwargs", {})
                     sampling_name = msg.get("eval_sampling_param", "")
@@ -104,7 +105,7 @@ class ExecutionScheduler:
                     msg["response"] = result.get("text", "")
                     self._throughput.record(
                         completion_tokens=result.get("completion_tokens", 0),
-                        wall_time_s=result.get("decode_ms", 0) / 1000.0 if result.get("decode_ms") else 0.1,
+                        wall_time_s=time.monotonic() - _msg_start,
                     )
                 elif rt == "loglikelihood":
                     continuation = msg.get("eval_continuation", "")

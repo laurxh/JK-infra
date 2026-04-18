@@ -52,9 +52,12 @@ class InferenceClient:
         resp.raise_for_status()
         data = resp.json()
         choice = data.get("choices", [{}])[0]
+        usage = data.get("usage", {})
         return {
             "id": request_id,
             "text": choice.get("text", ""),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "prompt_tokens": usage.get("prompt_tokens", 0),
         }
 
     async def loglikelihood(self, *, request_id: str, prompt: str, continuation: str) -> dict:
