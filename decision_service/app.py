@@ -7,7 +7,6 @@ from decision_service.inference_client import InferenceClient
 from decision_service.engine_monitor import EngineStatsPoller, ThroughputMeter
 from decision_service.inflight_registry import InflightRegistry
 from decision_service.history_store import HistoryStore
-from decision_service.decision_engine import DecisionEngine
 from decision_service.query_harvester import QueryHarvester
 from decision_service.admission import AdmissionController
 from decision_service.execution import ExecutionScheduler
@@ -48,14 +47,12 @@ async def main():
     history = HistoryStore()
     throughput = ThroughputMeter()
     stats_poller = EngineStatsPoller(inference, poll_interval_s=cfg.stats_poll_interval_s)
-    decision_engine = DecisionEngine(cfg, history, inflight)
-
     harvester = QueryHarvester(
         platform, overview_queue, concurrency=cfg.query_concurrency, backoff_s=cfg.query_backoff_s,
     )
     admission = AdmissionController(
         overview_queue=overview_queue, exec_queue=exec_queue,
-        platform=platform, decision_engine=decision_engine,
+        platform=platform,
         stats_poller=stats_poller, throughput_meter=throughput,
         inflight=inflight, config=cfg,
     )
