@@ -12,8 +12,8 @@ from decision_service.schemas import AdmissionAction, AdmissionDecision
 
 logger = logging.getLogger(__name__)
 
-# Engine concurrency limit — configurable
-MAX_ENGINE_TASKS = 8
+# Engine concurrency limit — read from config
+# (actual limit depends on KV cache / model / sequence length, must be calibrated on real hardware)
 # Reward threshold for thinking mode
 HIGH_REWARD_THRESHOLD = 1000.0
 # Max candidates to /ask per selector round
@@ -56,7 +56,7 @@ class AdmissionController:
                     await asyncio.sleep(0.2)
                     continue
 
-                available_slots = MAX_ENGINE_TASKS - stats.total_tasks - self._inflight.count
+                available_slots = self._cfg.max_engine_tasks - stats.total_tasks - self._inflight.count
                 if available_slots <= 0:
                     await asyncio.sleep(0.2)
                     continue

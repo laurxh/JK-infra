@@ -30,6 +30,7 @@ class DecisionConfig:
     health_poll_interval_s: float = 1.0
     health_timeout_s: float = 55.0
     think_token_multiplier: float = 3.0
+    max_engine_tasks: int = 16              # engine batch concurrency limit; calibrate on real hardware
 
     def sla_ttft(self, sla_name: str) -> float:
         return self.sla_levels[sla_name]

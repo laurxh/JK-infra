@@ -122,9 +122,9 @@ async def test_admission_waits_when_engine_full():
     exec_q: asyncio.Queue = asyncio.Queue()
     await overview_q.put(_make_overview(task_id=1))
 
-    cfg = _make_config()
+    cfg = _make_config(max_engine_tasks=8)
     platform = FakePlatformAsk(accept=True)
-    # Engine reports 8 tasks running = full
+    # Engine reports 8 tasks running = at limit
     ctrl = AdmissionController(
         overview_queue=overview_q, exec_queue=exec_q,
         platform=platform, stats_poller=FakeStatsPoller(total_tasks=8),
