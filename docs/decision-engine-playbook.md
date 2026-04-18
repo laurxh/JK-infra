@@ -35,80 +35,98 @@
 
 ---
 
-## 2. 当前决策逻辑（v0 — 2026-04-18）
+## 2. 当前决策逻辑（v1 — 2026-04-18 候选池版）
 
-### 2.1 两条路径
+### 2.1 架构变化：从"逐条判断"到"攒池挑最好"
 
-| 路径 | 任务类型 | 逻辑 |
+```
+QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
+                                         ↓
+                                   CandidatePool（去重, TTL 60s 清理）
+                                         ↓
+                                   Selector 循环（100ms 一轮）：
+                                     1. purge_stale()
+                                     2. 检查引擎门控：stats.total_tasks + inflight.count < MAX_ENGINE_TASKS(8)
+                                     3. pick_best(max=5, slots=available)
+                                        → 优先级：loglikelihood > loglikelihood_rolling > generate_until
+                                        → 同类型按 reward 降序
+                                     4. 选 profile → /ask → exec_queue
+```
+
+### 2.2 决策规则
+
+| 任务类型 | 决策 | Profile |
 |---|---|---|
-| **fast-path** | loglikelihood / loglikelihood_rolling | 无条件接（prefill 优先调度，0.1-0.2s 完成，任何 SLA 都稳过） |
-| **slow-path** | generate_until | 估 finish_time → 对比 SLA → 选最优 profile → 检查 EV |
+| loglikelihood | 几乎无条件接（prefill 0.1-0.2s） | chat_no_think |
+| loglikelihood_rolling | 引擎不忙时接 | raw |
+| generate_until + 宽 SLA(≥6s) + 高 reward | 接 | chat_think |
+| generate_until + 中 SLA(≥4s) | 接 | chat_no_think |
+| generate_until + 紧 SLA(<4s) | 接但轻量 | raw |
+| 任何类型 + 引擎满（≥8 tasks + inflight） | 不接（留在池里等） | — |
+| 任何类型 + 候选过期（>60s） | 清理 | — |
 
-### 2.2 slow-path 公式
+### 2.3 关键常数
 
-```
-backlog_s = (running.decode_tokens_remaining / throughput) × inflation
-          + waiting.compute_tokens_remaining / prefill_tok_per_s
-          + inflight.total_estimated_output_tokens / throughput × inflation × 0.5
-
-self_s = estimate_output_tokens(profile) / throughput × inflation
-
-finish_s = backlog_s + self_s
-
-accept if finish_s × safety_margin ≤ sla_ttft AND expected_reward > min_ev
-```
-
-### 2.3 当前超参
-
-| 参数 | 值 | 含义 | 可信度 |
+| 参数 | 值 | 位置 | 可信度 |
 |---|---|---|---|
-| `safety_margin` | 1.2 | 完成时间乘这个再比 SLA | 拍的，需要真数据调 |
-| `min_ev` | 0.1 | 期望收益低于此就 drop | 拍的 |
-| `decode_tok_per_s` | 750.0 | 整体 decode 吞吐 baseline | 来自队友口述，需要实测 |
-| `prefill_tok_per_s` | 18000.0 | prefill 吞吐 | 拍的 |
-| `logprob_traffic_ratio` | 0.3 | decode 被 prefill 抢占的膨胀系数 | 拍的 |
-| `think_token_multiplier` | 3.0 | thinking mode 输出 token 倍数 | 拍的 |
-| `DEFAULT_MAX_GEN_TOKS` | 256 | 所有 generate 任务的输出 token 估计 | **粗糙**——短回答高估，长推理低估 |
-| 正确率初始值 | 0.5 | 所有 (task, profile) 冷启动 | **粗糙**——前 50 个决策不准 |
+| `MAX_ENGINE_TASKS` | 8 | admission.py | 来自队友（并发 8），需要真机标定 |
+| `HIGH_REWARD_THRESHOLD` | 1000.0 | admission.py | 拍的，需要看真实 reward 分布 |
+| `staleness_s` | 60.0 | candidate_pool.py | 保守值（TTL 300s，60s 内决定） |
+| `MAX_PICKS_PER_ROUND` | 5 | admission.py | 一轮最多 ask 5 个 |
+| `DEFAULT_OUTPUT_ESTIMATE` | 256 | admission.py | 粗估，/ask 后可用真实 max_gen_toks 修正 |
+| `think_token_multiplier` | 3.0 | config.py | 拍的 |
+| `DEADLINE_MARGIN_S` | 30 | execution.py | 绝对超时前 30s 强制 submit |
 
 ### 2.4 Profile 选择
 
-| eval_task_name 包含 | 候选 profile 列表 |
-|---|---|
-| `gsm8k`, `math`, `minerva_math`, `mathqa`, `asdiv` | [chat_think, chat_no_think, raw] |
-| 其他 | [chat_no_think, raw] |
+**不依赖 eval_task_name**（该字段不可靠）。基于强特征：
 
-选最高 EV 的那个。SLA 太紧时 chat_think 会被过滤掉，自动降级。
+| 条件 | Profile |
+|---|---|
+| request_type = loglikelihood | chat_no_think |
+| request_type = loglikelihood_rolling | raw |
+| generate + SLA ≥ 6s + reward ≥ HIGH_REWARD_THRESHOLD | chat_think |
+| generate + SLA ≥ 4s | chat_no_think |
+| generate + SLA < 4s | raw |
+
+### 2.5 关键特性
+
+- **多 message 并发**：loglikelihood 多选题 4 个 message 用 `asyncio.gather` 并发推理
+- **600s 兜底**：`_deadline_watcher` 每 5s 检查，剩余 <30s 强制 submit 避免 -2×R_i
+- **引擎门控**：`stats.total_tasks + inflight.count ≥ MAX_ENGINE_TASKS` 时暂停接新单
 
 ---
 
 ## 3. 已知问题与改进方向
 
-### 3.1 🔴 P0 — 必须在真引擎联调前修
+### 3.1 ✅ 已解决（P0 — 2026-04-18）
 
-| 问题 | 现状 | 改法 |
-|---|---|---|
-| **token 估计全用 256** | `_estimate_output_tokens` 不区分任务 | /ask 拿到 prompt 后可以用 tokenizer 估 prompt 长度；按 `eval_task_name` 维护一张经验值表；对 `max_gen_toks` 大的 sampling profile 做修正 |
-| **多 message 串行** | execution.py 里逐 message 串行调推理 | loglikelihood 多选题 4 个 message 可以 `asyncio.gather` 并发发出去 |
-| **600s 绝对超时兜底缺失** | 没有 deadline watcher | ExecutionScheduler 要跑一个后台协程，对 `inflight.get_overdue_task_ids()` 做 best-effort submit |
+| 问题 | 解决方案 |
+|---|---|
+| ~~逐条判断，没有候选池~~ | 新增 CandidatePool，按 request_type 优先 + reward 排序 |
+| ~~token 估计全用 256~~ | admission 阶段用 DEFAULT_OUTPUT_ESTIMATE，后续可 /ask 后修正 |
+| ~~profile 靠 task_name 硬编码~~ | 改为基于 SLA + reward 强特征选 profile |
+| ~~多 message 串行~~ | asyncio.gather 并发推理 |
+| ~~600s 超时无兜底~~ | deadline_watcher 每 5s 检查，<30s 强制 submit |
 
 ### 3.2 🟡 P1 — 显著影响得分
 
 | 问题 | 现状 | 改法 |
 |---|---|---|
-| **正确率冷启动** | 全部 0.5 | 按 request_type 给不同初值（loglikelihood 可给 0.7，generate 给 0.5）；或前 N 个任务无条件接（warmup phase） |
-| **不认识的 task_name** | 全走 [chat_no_think, raw] | 增加更多映射（开发文档提到：数学推理、常识问答、语言理解、知识推理、语言建模）；或对不认识的先用 chat_no_think 试，看正确率自学习 |
-| **inflight 重叠系数** | 硬编码 `0.5` | 需要理解 engine /status 与 inflight 的真实重叠关系：engine 的 `decode_tokens_remaining` 是否已经包含我们提交但还在排队的任务？如果是，这个 0.5 应该去掉 |
-| **没有 SLA 等级偏好** | 有空间就接 | Diamond+ 的 SLA 对 generate 任务可能根本不可行（0.5-2s），应该直接 drop 而不是算一遍公式再 drop |
+| **/ask 后修正 inflight token** | admission 用默认 256 估 | /ask 后从 messages 提取真实 max_gen_toks，更新 inflight |
+| **正确率冷启动** | history_store 全部 0.5 | 按 request_type 给不同初值；或前 N 个任务无条件接 |
+| **HIGH_REWARD_THRESHOLD 不准** | 硬编码 1000 | 需要看真实 reward 分布后标定 |
+| **MAX_ENGINE_TASKS 是否准确** | 硬编码 8 | 真机可能不同；应从 /status 动态推断或配置化 |
 
 ### 3.3 🟢 P2 — 后续优化
 
 | 问题 | 改法 |
 |---|---|
-| **批量挑题** | 从 overview_queue 一次取 K 个，挑 EV/cost 最优的若干个接 |
-| **observe 队列** | 对 SLA 宽松但当前 backlog 重的任务，暂存观察，等 backlog 降下来再接 |
-| **prefix cache 感知** | 如果推理引擎支持 prefix sharing，相同 prompt 前缀的 loglikelihood 多选题可以提示 engine 做 KV 复用 |
-| **动态 inflation** | `logprob_traffic_ratio` 用最近 N 秒的实际 logprob/generate 比例替代常数 |
+| **generate + 严 SLA 该不该直接 drop** | 目前还是会接（用 raw profile）；可能应该直接 drop Diamond/Stellar/Glorious/Supreme 的 generate |
+| **动态调整 MAX_ENGINE_TASKS** | 根据 /status 观察到的实际并发峰值自适应 |
+| **prefix cache 感知** | 相同 prompt 前缀的 loglikelihood 多选题提示 engine 做 KV 复用 |
+| **task_name 统计闭环** | 收集 (task_name, correctness) 统计表，发现正确率规律后可以回灌决策 |
+| **observe 队列** | 对 SLA 宽松但当前引擎忙的任务，暂存等引擎空闲再接 |
 
 ---
 
@@ -135,11 +153,12 @@ accept if finish_s × safety_margin ≤ sla_ttft AND expected_reward > min_ev
 
 | 你观察到 | 该调 | 方向 |
 |---|---|---|
-| SLA 命中率低 | `safety_margin` ↑ 或 `DEFAULT_MAX_GEN_TOKS` ↑ | 更保守 |
-| 接受率太低（很多 drop） | `safety_margin` ↓ 或 `min_ev` ↓ | 更激进 |
-| generate 任务经常超时 | `logprob_traffic_ratio` ↑ | decode 被抢占更多 |
-| thinking 任务正确率不高 | `think_token_multiplier` ↑ 或检查 chat template 渲染 | 给更多 token / 检查拼装 |
-| engine 经常空闲 | `query_concurrency` ↑ + `safety_margin` ↓ | 多拉题多接 |
+| 引擎经常空闲 | `MAX_ENGINE_TASKS` ↑ 或 `query_concurrency` ↑ | 多接 |
+| 接受率太低 | `MAX_ENGINE_TASKS` ↑ | 放开门控 |
+| generate 经常超 SLA | `HIGH_REWARD_THRESHOLD` ↑（少用 think）或 generate + 紧 SLA 直接 drop | 更保守 |
+| loglikelihood 正确率低 | 检查 chat template 渲染是否正确 | 调试 |
+| thinking 任务正确率不高 | `think_token_multiplier` ↑ 或检查 chat template `enable_thinking` | 给更多 token |
+| 频繁被 deadline watcher 强制 submit | `DEADLINE_MARGIN_S` ↑ 或少接 generate | 更保守 |
 
 ---
 
@@ -149,4 +168,4 @@ accept if finish_s × safety_margin ≤ sla_ttft AND expected_reward > min_ev
 |---|---|---|
 | 2026-04-18 | v0 初版上线 | 三层架构 + fast/slow path + profile 选择 |
 | 2026-04-18 | 加 null 字段防御 | ubiservice mock 返回 eval_task_name=null |
-| | | |
+| 2026-04-18 | **v1 候选池版** | 候选池+分桶+引擎门控 替代逐条公式；多message并发；600s兜底watcher；profile不靠task_name |
