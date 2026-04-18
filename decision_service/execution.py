@@ -21,16 +21,51 @@ class ExecutionScheduler:
         self._history = history
 
     async def run(self):
+        watcher = asyncio.create_task(self._deadline_watcher())
+        try:
+            while True:
+                try:
+                    task: InflightTask = await asyncio.wait_for(
+                        self._exec_q.get(), timeout=1.0,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    raise
+                asyncio.create_task(self._process(task))
+        finally:
+            watcher.cancel()
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
+
+    async def _deadline_watcher(self):
+        """Periodically check for tasks approaching absolute timeout. Force-submit to avoid -2×R_i."""
+        DEADLINE_MARGIN_S = 30  # submit this many seconds before absolute deadline
+        CHECK_INTERVAL_S = 5
         while True:
             try:
-                task: InflightTask = await asyncio.wait_for(
-                    self._exec_q.get(), timeout=1.0,
-                )
-            except asyncio.TimeoutError:
-                continue
+                await asyncio.sleep(CHECK_INTERVAL_S)
+                now = time.monotonic()
+                for task in self._inflight.all_tasks():
+                    remaining = task.absolute_deadline - now
+                    if remaining < DEADLINE_MARGIN_S:
+                        logger.warning(
+                            "Deadline approaching for task %d (%.1fs left), forcing submit",
+                            task.task_id, remaining,
+                        )
+                        try:
+                            await self._platform.submit(task.task_data)
+                        except Exception as e:
+                            logger.error("Forced submit failed for task %d: %s", task.task_id, e)
+                        self._inflight.remove(task.task_id)
+                        log_submit(task.task_id, False, now - task.ask_time,
+                                   task.profile.value if task.profile else None)
             except asyncio.CancelledError:
                 raise
-            asyncio.create_task(self._process(task))
+            except Exception as e:
+                logger.error("Deadline watcher error: %s", e)
 
     async def _process(self, task: InflightTask):
         try:

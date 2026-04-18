@@ -96,6 +96,40 @@ async def test_execution_generate_then_submit():
 
 
 @pytest.mark.asyncio
+async def test_deadline_watcher_forces_submit():
+    """Tasks approaching deadline should be force-submitted by watcher."""
+    exec_q: asyncio.Queue = asyncio.Queue()
+    inflight = InflightRegistry()
+
+    # Task with deadline in 10s (within 30s margin → should be caught)
+    now = time.monotonic()
+    task = InflightTask(
+        task_id=99, task_data={"overview": {}, "messages": []},
+        profile=ExecutionProfile.RAW, estimated_output_tokens=0,
+        sla_ttft=1.0, ask_time=now - 580, absolute_deadline=now + 10,
+    )
+    inflight.add(task)
+    # Don't put in exec_q — the watcher should catch it from inflight registry
+
+    platform = FakePlatformSubmit()
+    scheduler = ExecutionScheduler(
+        exec_queue=exec_q, inference=FakeInference(), platform=platform,
+        inflight=inflight, config=FakeConfig(), throughput_meter=FakeThroughput(), history=None,
+    )
+
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(7)  # Wait for watcher to run at least once (5s interval)
+    runner.cancel()
+    try:
+        await runner
+    except asyncio.CancelledError:
+        pass
+
+    assert inflight.count == 0  # Removed by watcher
+    assert len(platform.submitted) >= 1  # Force-submitted
+
+
+@pytest.mark.asyncio
 async def test_execution_loglikelihood():
     exec_q: asyncio.Queue = asyncio.Queue()
     inflight = InflightRegistry()
