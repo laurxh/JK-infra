@@ -1,0 +1,17 @@
+# JK Infra 服务端 + nano-vllm 引擎在新机器上需要安装的 Python 依赖
+# 版本基线来自当前机器的 ml 环境：
+# - Python 3.11.14
+# - torch 2.10.0+cu128
+# - CUDA 12.8
+# - transformers 4.57.6
+# - triton 3.6.0
+# - flash-attn 2.8.3
+
+numpy
+xxhash
+tqdm
+safetensors
+transformers==4.57.6
+torch==2.10.0
+triton==3.6.0
+flash-attn==2.8.3
