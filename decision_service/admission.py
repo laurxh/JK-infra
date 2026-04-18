@@ -49,7 +49,10 @@ class AdmissionController:
                     await asyncio.sleep(0.2)
                     continue
 
-                available_slots = self._cfg.max_engine_tasks - stats.total_tasks - self._inflight.count
+                # Use engine's own task count as authoritative source (not inflight)
+                # /stats.total_tasks = running + waiting requests in engine
+                # Adding inflight.count would double-count tasks already sent to engine
+                available_slots = self._cfg.max_engine_tasks - stats.total_tasks
                 if available_slots <= 0:
                     await asyncio.sleep(0.2)
                     continue

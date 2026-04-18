@@ -93,7 +93,7 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 
 - **多 message 并发**：loglikelihood 多选题 4 个 message 用 `asyncio.gather` 并发推理
 - **600s 兜底**：`_deadline_watcher` 每 5s 检查，剩余 <30s 强制 submit 避免 -2×R_i
-- **引擎门控**：`stats.total_tasks + inflight.count ≥ MAX_ENGINE_TASKS` 时暂停接新单
+- **引擎门控**：`stats.total_tasks ≥ max_engine_tasks` 时暂停接新单。只用 engine 自己的 /stats 做权威来源，不加 inflight.count（避免双重计数——engine 里的 task 和 inflight 有重叠）
 
 ---
 
@@ -123,7 +123,7 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 | 问题 | 改法 |
 |---|---|
 | **generate + 严 SLA 该不该直接 drop** | 目前还是会接（用 raw profile）；可能应该直接 drop Diamond/Stellar/Glorious/Supreme 的 generate |
-| **动态调整 MAX_ENGINE_TASKS** | 根据 /status 观察到的实际并发峰值自适应 |
+| **动态调整 max_engine_tasks** | 问队友在 /stats 里加返回 `max_num_seqs`（engine 启动参数），省去手动配置；或根据 waiting.task_count 长期 >0 自动收紧 |
 | **prefix cache 感知** | 相同 prompt 前缀的 loglikelihood 多选题提示 engine 做 KV 复用 |
 | **task_name 统计闭环** | 收集 (task_name, correctness) 统计表，发现正确率规律后可以回灌决策 |
 | **observe 队列** | 对 SLA 宽松但当前引擎忙的任务，暂存等引擎空闲再接 |
@@ -134,9 +134,12 @@ QueryHarvester → overview_queue → AdmissionController._drain_queue_to_pool()
 
 详见 `docs/inference-contract.md`（v1.0 定稿）。核心要点：
 
-- 5 个 HTTP 接口：`/health`, `/status`, `/generate`, `/loglikelihood`, `/loglikelihood_rolling`
+- 5 个 HTTP 接口：`/health`, `/stats`（注意不是 /status）, `/generate`, `/loglikelihood`, `/loglikelihood_rolling`
+- **字段名**：请求用 `ID`（不是 request_id），loglikelihood 用 `eval_continuation`（不是 continuation）
+- **/stats 响应**：嵌套在 `queue_stats` 下：`{status, queue_stats: {running: {...}, waiting: {...}}}`
+- **/stats.total_tasks 是 message 级的请求数**（不是 platform task 数）——一个 4 选 1 loglikelihood = 4 个 engine tasks
 - engine 不套 chat template，决策侧用 `tokenizer.apply_chat_template(tokenize=False)` 渲染 prompt 字符串
-- `request_id` 幂等（同 id 返回上次结果）
+- `ID` 幂等（同 ID 返回上次结果）
 - engine 是 prefill 优先调度（logprob 任务抢占 generate 的 decode）
 
 ---
