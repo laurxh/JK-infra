@@ -57,7 +57,7 @@ def load_config() -> DecisionConfig:
     return DecisionConfig(
         platform_url=os.environ.get("PLATFORM_URL", contest.get("platform_url", "http://127.0.0.1:8003")),
         inference_url=os.environ.get("INFERENCE_URL", "http://127.0.0.1:8000"),
-        token=os.environ.get("TOKEN", "default_token"),
+        token=os.environ.get("TEAM_TOKEN", os.environ.get("TOKEN", "default_token")),
         team_name=os.environ.get("TEAM_NAME", "team_jk"),
         model_name=contest.get("model_name", "Qwen3-32B"),
         model_path=os.environ.get("MODEL_PATH", contest.get("model_path", "")),
